@@ -5,8 +5,6 @@ from typing import List, Dict, Any, Optional
 import asyncio
 
 from ..models.github import GitHubFile
-from ..models.analysis import CodeIssue, IssueType, IssueSeverity
-from ..utils.response_formatter import parse_claude_response, calculate_overall_score
 
 
 class ClaudeService:
@@ -36,105 +34,116 @@ class ClaudeService:
         else:
             print("✅ Debug: Claude API key loaded successfully")
     
-    async def analyze_code(self, files: List[GitHubFile], repository_name: str) -> Dict[str, Any]:
+    async def analyze_code(self, files: List[GitHubFile], repository_name: str, context: Dict = None) -> str:
         """
-        Send code files to Claude for analysis and return structured results
+        Send code files to Claude for analysis and return clean formatted review
         """
         if not files:
             raise ValueError("No files provided for analysis")
         
         # Prepare the analysis prompt
-        prompt = self._create_analysis_prompt(files, repository_name)
+        prompt = self._create_analysis_prompt(files, repository_name, context)
         
-        # Call Claude API
+        # Call Claude API and return the formatted response directly
         claude_response = await self._call_claude_api(prompt)
         
-        # Parse the response
-        parsed_response = parse_claude_response(claude_response)
-        
-        return parsed_response
+        return claude_response
     
-    def _create_analysis_prompt(self, files: List[GitHubFile], repository_name: str) -> str:
+    def _create_analysis_prompt(self, files: List[GitHubFile], repository_name: str, context: Dict = None) -> str:
         """
-        Create a comprehensive analysis prompt for Claude
+        Create a prompt for Claude to generate clean, actionable code review
         """
         # Build file content section
         files_content = []
-        for file in files[:15]:  # Limit to prevent token overflow
-            content_preview = file.content[:2000] if len(file.content) > 2000 else file.content
+        for file in files[:15]:  # Reasonable limit
+            content_preview = file.content[:2500] if len(file.content) > 2500 else file.content
             files_content.append(f"""
-File: {file.path}
-Language: {file.language or 'Unknown'}
-Size: {file.size} bytes
-Content:
+**File: {file.path}** ({file.language or 'Unknown'})
 ```{file.language or ''}
 {content_preview}
 ```
-{'... (content truncated)' if len(file.content) > 2000 else ''}
 """)
         
         files_text = "\n".join(files_content)
         
-        prompt = f"""You are an expert code reviewer analyzing the repository "{repository_name}". 
+        # Build context section
+        context_section = ""
+        if context:
+            context_parts = []
+            if context.get('project_description'):
+                context_parts.append(f"**Project:** {context['project_description']}")
+            if context.get('experience_level'):
+                context_parts.append(f"**Developer Level:** {context['experience_level']}")
+            if context.get('focus_areas'):
+                focus = ", ".join(context['focus_areas'])
+                context_parts.append(f"**Focus Areas:** {focus}")
+            
+            if context_parts:
+                context_section = f"""
+## CONTEXT:
+{chr(10).join(context_parts)}
+"""
 
-Please analyze the following code files and provide a comprehensive code review focusing on:
+        prompt = f"""You are a friendly code reviewer providing actionable feedback for the "{repository_name}" repository. 
 
-1. **Security Issues**: Vulnerabilities, unsafe practices, exposed secrets
-2. **Performance Issues**: Inefficient algorithms, memory leaks, blocking operations
-3. **Maintainability Issues**: Code complexity, lack of documentation, poor structure
-4. **Style Issues**: Formatting, naming conventions, code standards
-5. **Bugs**: Logic errors, potential runtime errors, edge cases
+{context_section}
 
-**Code Files to Analyze:**
+## YOUR TASK:
+Provide a clean, encouraging code review in the EXACT format below. Be specific but not overwhelming.
+
+## CODE TO REVIEW:
 {files_text}
 
-**Required Output Format:**
-Please respond with a JSON object in this exact structure:
+## REQUIRED FORMAT:
+Write your response exactly like this template:
 
-```json
-{{
-  "analysis_summary": {{
-    "total_issues": <number>,
-    "security_issues": <number>,
-    "performance_issues": <number>,
-    "maintainability_issues": <number>,
-    "style_issues": <number>,
-    "bug_issues": <number>,
-    "overall_score": <number 0-100>
-  }},
-  "detailed_issues": [
-    {{
-      "file": "<file_path>",
-      "line": <line_number_or_null>,
-      "type": "<security|performance|maintainability|style|bug>",
-      "severity": "<critical|high|medium|low>",
-      "message": "<brief_description>",
-      "suggestion": "<how_to_fix>",
-      "code_snippet": "<problematic_code_or_null>",
-      "improved_code": "<suggested_improvement_or_null>"
-    }}
-  ],
-  "file_scores": [
-    {{
-      "file": "<file_path>",
-      "score": <score_0_to_100>,
-      "issues_count": <number>
-    }}
-  ],
-  "general_feedback": "<overall_assessment_and_recommendations>"
-}}
+**Overall Score: [XX]/100 (Grade)**
+[One sentence summary of the code quality]
+
+**What's Good:**
+* **[Strength 1]**: [Why it's good and why it matters]
+* **[Strength 2]**: [Explanation]
+* **[Strength 3]**: [Explanation]
+
+**What Can Be Improved:**
+
+1. **[Issue Area] ([X]/10):**
+   * **Issue**: [Specific problem you found]
+   * **Action**: [Concrete step to fix it]
+
+2. **[Issue Area] ([X]/10):**
+   * **Issue**: [Specific problem you found]
+   * **Action**: [Concrete step to fix it]
+
+3. **[Issue Area] ([X]/10):**
+   * **Issue**: [Specific problem you found]
+   * **Action**: [Concrete step to fix it]
+
+**Code Sample (if applicable):**
+
+**Before:**
+```[language]
+[problematic code from their actual files]
 ```
 
-**Guidelines:**
-- Focus on actionable feedback with specific line numbers when possible
-- Provide code suggestions for improvements
-- Consider the overall architecture and patterns used
-- Score files based on code quality (100 = perfect, 0 = critical issues)
-- Overall score should reflect the repository's general code quality
-- Prioritize security and performance issues over style issues
-- Be constructive and specific in your suggestions
+**After:**
+```[language]
+[improved version]
+```
 
-Analyze the code now and return only the JSON response:"""
+**Final Thoughts:**
+[Encouraging closing message about their progress and next steps]
+
+## GUIDELINES:
+- Be encouraging and constructive
+- Focus on 2-4 key improvement areas maximum
+- Use their actual code in examples when possible
+- Give specific, actionable advice
+- Adjust complexity based on their experience level
+- End on a positive, motivating note
+- Use the EXACT format structure shown above
+
+Analyze the code and provide your review in this format:"""
 
         return prompt
     
@@ -188,37 +197,11 @@ Analyze the code now and return only the JSON response:"""
         except httpx.RequestError as e:
             raise ValueError(f"Network error calling Claude API: {str(e)}")
     
-    def _extract_issues_from_response(self, parsed_response: Dict[str, Any]) -> List[CodeIssue]:
+    def _extract_issues_from_response(self, parsed_response: Dict[str, Any]) -> List[Dict]:
         """
-        Convert Claude's response to CodeIssue objects
+        Convert Claude's response to simple issue dictionaries (not used in simplified version)
         """
-        issues = []
-        
-        for issue_data in parsed_response.get("detailed_issues", []):
-            try:
-                # Map issue type
-                issue_type = IssueType(issue_data.get("type", "maintainability"))
-                
-                # Map severity
-                severity = IssueSeverity(issue_data.get("severity", "medium"))
-                
-                issue = CodeIssue(
-                    file=issue_data.get("file", "unknown"),
-                    line=issue_data.get("line"),
-                    type=issue_type,
-                    severity=severity,
-                    message=issue_data.get("message", ""),
-                    suggestion=issue_data.get("suggestion", ""),
-                    code_snippet=issue_data.get("code_snippet"),
-                    improved_code=issue_data.get("improved_code")
-                )
-                issues.append(issue)
-                
-            except (ValueError, KeyError) as e:
-                # Skip malformed issues
-                continue
-        
-        return issues
+        return parsed_response.get("detailed_issues", [])
     
     async def health_check(self) -> bool:
         """

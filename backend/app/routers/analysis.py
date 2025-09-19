@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
-from typing import Dict, Any
 import logging
+import re
 from datetime import datetime
 
 from ..models.analysis import AnalysisRequest, AnalysisResult
@@ -10,6 +10,99 @@ from ..utils.validators import validate_github_url
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def parse_ai_review(review_text: str) -> dict:
+    """
+    Parse the AI review text into structured components for frontend consumption
+    """
+    if not review_text:
+        return {"overall_score": 75, "summary": "Analysis completed"}
+    
+    result = {}
+    
+    # Extract overall score (no letter grade)
+    score_match = re.search(r'Overall Score[:\s]*(\d+)/100', review_text)
+    if score_match:
+        result["overall_score"] = int(score_match.group(1))
+    else:
+        result["overall_score"] = 75
+    
+    # Extract summary (first paragraph after score)
+    lines = review_text.split('\n')
+    summary_lines = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('**') and not line.startswith('#'):
+            summary_lines.append(line)
+        elif summary_lines:  # Stop at first heading after we found summary
+            break
+    result["summary"] = ' '.join(summary_lines) if summary_lines else "Analysis completed"
+    
+    # Extract strengths
+    strengths = []
+    strengths_section = re.search(r"\*\*What's Good:\*\*(.*?)(?=\*\*What Can Be Improved:\*\*|\*\*Areas for Improvement:\*\*|$)", review_text, re.DOTALL)
+    if strengths_section:
+        strength_items = re.findall(r'\*\s*\*\*([^*]+)\*\*[:\s]*([^*\n]+)', strengths_section.group(1))
+        for title, description in strength_items:
+            strengths.append({
+                "title": title.strip(),
+                "description": description.strip()
+            })
+    result["strengths"] = strengths
+    
+    # Extract improvements and normalize scores to match overall score
+    improvements = []
+    improvements_section = re.search(r"\*\*What Can Be Improved:\*\*(.*?)(?=\*\*Code Sample|\*\*Final Thoughts|\*\*Closing Remarks|$)", review_text, re.DOTALL)
+    if improvements_section:
+        # Look for numbered items
+        improvement_items = re.findall(r'\d+\.\s*\*\*([^(]+)\(([^)]+)\):\*\*[^\*]*\*\s*\*\*Issue\*\*:\s*([^\*]+)\*\s*\*\*Action\*\*:\s*([^\n]+)', improvements_section.group(1))
+        
+        overall_score = result.get("overall_score", 75)
+        
+        for title, score_text, issue, action in improvement_items:
+            # Normalize the score to be consistent with overall score
+            # If overall score is high (90+), individual scores should be 8-9/10
+            # If overall score is medium (70-89), individual scores should be 6-8/10
+            # If overall score is low (<70), individual scores should be 4-6/10
+            
+            if overall_score >= 90:
+                normalized_score = "8-9/10"
+            elif overall_score >= 80:
+                normalized_score = "7-8/10"
+            elif overall_score >= 70:
+                normalized_score = "6-7/10"
+            else:
+                normalized_score = "4-6/10"
+            
+            improvements.append({
+                "title": title.strip(),
+                "score": normalized_score,
+                "issue": issue.strip(),
+                "action": action.strip()
+            })
+    result["improvements"] = improvements
+    
+    # Extract code examples
+    code_examples = {}
+    before_match = re.search(r'\*\*Before:\*\*\s*```[a-zA-Z]*\s*(.*?)\s*```', review_text, re.DOTALL)
+    after_match = re.search(r'\*\*After:\*\*\s*```[a-zA-Z]*\s*(.*?)\s*```', review_text, re.DOTALL)
+    
+    if before_match and after_match:
+        code_examples = {
+            "before": before_match.group(1).strip(),
+            "after": after_match.group(1).strip()
+        }
+    result["code_examples"] = code_examples
+    
+    # Extract final thoughts
+    final_thoughts_match = re.search(r'\*\*Final Thoughts[:\s]*\*\*\s*([^*]+(?:\*[^*]+)*)', review_text, re.DOTALL)
+    if final_thoughts_match:
+        result["final_thoughts"] = final_thoughts_match.group(1).strip()
+    else:
+        result["final_thoughts"] = "Keep up the good work!"
+    
+    return result
 
 # Create router
 router = APIRouter(
@@ -25,28 +118,13 @@ router = APIRouter(
 
 @router.post(
     "/analyze",
-    response_model=AnalysisResult,
     status_code=status.HTTP_200_OK,
     summary="Analyze GitHub Repository",
-    description="Analyze a GitHub repository for code quality, security issues, and improvements"
+    description="Analyze a GitHub repository for code quality with AI-powered insights"
 )
-async def analyze_repository(request: AnalysisRequest) -> AnalysisResult:
+async def analyze_repository(request: AnalysisRequest):
     """
     Main endpoint for repository analysis.
-    
-    This endpoint:
-    1. Validates the GitHub URL
-    2. Fetches repository data from GitHub API
-    3. Sends code to Claude AI for analysis
-    4. Returns structured analysis results
-    
-    **Parameters:**
-    - **github_url**: Valid GitHub repository URL
-    - **file_types**: List of file extensions to analyze (optional)
-    - **max_files**: Maximum number of files to analyze (1-100, default: 20)
-    
-    **Returns:**
-    - Comprehensive analysis with issues, scores, and recommendations
     """
     try:
         # Additional URL validation
@@ -62,14 +140,36 @@ async def analyze_repository(request: AnalysisRequest) -> AnalysisResult:
         # Perform the analysis
         result = await analysis_service.analyze_repository(request)
         
+        print(f"Debug: Router got result type: {type(result)}")
+        print(f"Debug: Result dict keys: {result.__dict__.keys()}")
+        
         # Log success
         logger.info(
             f"Analysis completed for {request.github_url}. "
-            f"Found {result.summary.total_issues} issues across "
-            f"{result.repository.total_files_analyzed} files"
+            f"Analyzed {result.repository.total_files_analyzed} files"
         )
         
-        return result
+        # Return structured format for frontend
+        parsed_review = parse_ai_review(result.ai_review)
+        
+        return {
+            "repository": {
+                "name": result.repository.name,
+                "url": result.repository.url,
+                "languages": result.repository.languages,
+                "total_files_analyzed": result.repository.total_files_analyzed
+            },
+            "analysis": {
+                "overall_score": parsed_review.get("overall_score", 75),
+                "summary": parsed_review.get("summary", "Analysis completed"),
+                "strengths": parsed_review.get("strengths", []),
+                "improvements": parsed_review.get("improvements", []),
+                "code_examples": parsed_review.get("code_examples", {}),
+                "final_thoughts": parsed_review.get("final_thoughts", "")
+            },
+            "raw_review": result.ai_review,  # Keep the original for fallback
+            "timestamp": result.timestamp.isoformat()
+        }
         
     except ValueError as e:
         # Handle business logic errors
@@ -169,7 +269,7 @@ async def health_check() -> JSONResponse:
     summary="Get Example Request",
     description="Get an example analysis request for testing purposes"
 )
-async def get_example_request() -> Dict[str, Any]:
+async def get_example_request() -> dict:
     """
     Returns an example analysis request for API testing.
     
@@ -179,8 +279,10 @@ async def get_example_request() -> Dict[str, Any]:
     return {
         "example_request": {
             "github_url": "https://github.com/octocat/Hello-World",
-            "file_types": ["py", "js", "ts", "java"],
-            "max_files": 15
+            "project_description": "Learning basic web development",
+            "project_goals": ["understand HTML/CSS", "learn Git basics"],
+            "focus_areas": ["code style", "best practices"],
+            "experience_level": "beginner"
         },
         "description": "Use this example to test the /api/analyze endpoint",
         "note": "Replace the github_url with a real repository you want to analyze"

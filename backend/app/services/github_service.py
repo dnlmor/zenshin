@@ -21,14 +21,9 @@ class GitHubService:
         if self.github_token:
             self.headers["Authorization"] = f"Bearer {self.github_token}"
     
-    async def fetch_repository(
-        self, 
-        github_url: str, 
-        file_types: List[str], 
-        max_files: int = 20
-    ) -> GitHubRepository:
+    async def fetch_repository(self, github_url: str) -> GitHubRepository:
         """
-        Fetch repository data from GitHub API
+        Fetch repository data from GitHub API with intelligent file detection
         """
         # Validate and parse GitHub URL
         if not validate_github_url(github_url):
@@ -40,8 +35,14 @@ class GitHubService:
             # Get repository info
             repo_info = await self._get_repository_info(client, owner, repo)
             
-            # Get repository languages
+            # Get repository languages to determine what to analyze
             languages = await self._get_repository_languages(client, owner, repo)
+            
+            # Auto-detect file types based on repository languages
+            file_types = self._detect_relevant_file_types(languages)
+            
+            # Smart file limit - keep reasonable for API performance
+            max_files = min(20, max(10, len(languages) * 3))
             
             # Get repository contents
             files = await self._get_repository_files(
@@ -56,6 +57,59 @@ class GitHubService:
                 files=files,
                 default_branch=repo_info["default_branch"]
             )
+    
+    def _detect_relevant_file_types(self, languages: Dict[str, int]) -> List[str]:
+        """
+        Auto-detect relevant file types based on repository languages
+        """
+        language_to_extensions = {
+            'Python': ['py', 'pyw'],
+            'JavaScript': ['js', 'mjs'],
+            'TypeScript': ['ts', 'tsx'],
+            'Java': ['java'],
+            'C++': ['cpp', 'cc', 'cxx', 'h', 'hpp'],
+            'C': ['c', 'h'],
+            'C#': ['cs'],
+            'PHP': ['php'],
+            'Ruby': ['rb'],
+            'Go': ['go'],
+            'Rust': ['rs'],
+            'Swift': ['swift'],
+            'Kotlin': ['kt'],
+            'Scala': ['scala'],
+            'HTML': ['html', 'htm'],
+            'CSS': ['css', 'scss', 'sass'],
+            'Shell': ['sh', 'bash'],
+            'PowerShell': ['ps1'],
+        }
+        
+        file_types = set()
+        
+        for language in languages.keys():
+            if language in language_to_extensions:
+                file_types.update(language_to_extensions[language])
+        
+        # Always include common config/doc files
+        file_types.update(['json', 'yaml', 'yml', 'md', 'txt'])
+        
+        # If no specific languages detected, use common web/general files
+        if not file_types:
+            file_types = ['py', 'js', 'ts', 'java', 'cpp', 'c', 'go', 'rs', 'md', 'json']
+        
+        return list(file_types)
+    
+    def _calculate_optimal_file_limit(self, languages: Dict[str, int]) -> int:
+        """
+        Calculate optimal number of files to analyze based on repository complexity
+        """
+        # Base limit
+        base_limit = 15
+        
+        # Adjust based on number of languages (more languages = more files needed)
+        language_bonus = min(10, len(languages) * 2)
+        
+        # Cap at reasonable limit for API performance
+        return min(30, base_limit + language_bonus)
     
     def _parse_github_url(self, github_url: str) -> tuple[str, str]:
         """
