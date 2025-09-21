@@ -90,7 +90,6 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173",
         "https://zenshin.netlify.app",
-        "https://www.zenshin.dnlmor.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
