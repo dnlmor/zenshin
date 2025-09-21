@@ -74,8 +74,8 @@ app = FastAPI(
     """,
     version="1.0.0",
     contact={
-        "name": "Daniel",
-        "email": "daniel@example.com"
+        "name": "dnlmor",
+        "email": "morenosiahaan07@gmail.com"
     },
     license_info={
         "name": "MIT License"
@@ -87,9 +87,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # React development server
-        "http://localhost:5173",  # Vite development server
-        "https://your-frontend-domain.com"  # Production frontend
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://zenshin.netlify.app"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
@@ -106,7 +106,7 @@ async def root():
     Root endpoint with API information
     """
     return {
-        "message": "🤖 AI Code Review Assistant Backend",
+        "message": "AI Code Review Assistant Backend",
         "version": "1.0.0",
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),
