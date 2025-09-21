@@ -260,10 +260,6 @@ npm run build
 - **CORS**: Configured for specific origins in production
 - **Error Handling**: Sensitive information never exposed in error messages
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgments
 
 - **Claude AI** by Anthropic for intelligent code analysis
