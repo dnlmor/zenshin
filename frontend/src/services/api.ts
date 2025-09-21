@@ -1,6 +1,17 @@
 import { AnalysisRequest, AnalysisResponse } from '@/types';
 
-const API_BASE_URL = '/api';
+// Determine API base URL based on environment
+const getApiBaseUrl = (): string => {
+  // In development, use proxy
+  if (import.meta.env.DEV) {
+    return '/api';
+  }
+  
+  // In production, use full backend URL
+  return 'https://zenshin.onrender.com/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Custom API Error class
 export class ApiError extends Error {
@@ -31,6 +42,8 @@ class ApiService {
     };
 
     try {
+      console.log(`Making API request to: ${url}`); // Debug log
+      
       const response = await fetch(url, config);
       
       if (!response.ok) {
